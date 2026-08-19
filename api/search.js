@@ -139,20 +139,6 @@ module.exports = async (req, res) => {
     }
   }
 
-  // Exclude specific roll numbers from auto-solving (manual CAPTCHA required)
-  const EXCLUDED_AUTO_SOLVE_ROLLS = ['2500541530140'];
-  if (EXCLUDED_AUTO_SOLVE_ROLLS.includes(cleanEnrollNo)) {
-    const nextCaptchaUrl = `/api/captcha?token=${encodeURIComponent(currentToken)}&cookies=${encodeURIComponent(currentCookies)}`;
-    return res.json({ 
-      success: false, 
-      needsManualCaptcha: true, 
-      message: "Please enter the security code below to proceed.",
-      captchaUrl: nextCaptchaUrl,
-      token: currentToken,
-      cookies: currentCookies
-    });
-  }
-
   // 2. No manual Captcha provided -> AUTO-SOLVE with OCR Space (Up to 3 attempts)
   const MAX_AUTO_ATTEMPTS = 3;
 
