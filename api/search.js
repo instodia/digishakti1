@@ -139,7 +139,21 @@ module.exports = async (req, res) => {
     }
   }
 
-  // 2. No manual Captcha provided -> AUTO-SOLVE with OCR Space (Up to 3 attempts)
+  // 2. Check if auto-solving is disabled for specific roll numbers
+  const SKIP_AUTO_SOLVE_ROLLS = ['2500541530140'];
+  if (SKIP_AUTO_SOLVE_ROLLS.includes(cleanEnrollNo)) {
+    const nextCaptchaUrl = `/api/captcha?token=${encodeURIComponent(currentToken)}&cookies=${encodeURIComponent(currentCookies)}`;
+    return res.json({ 
+      success: false, 
+      needsManualCaptcha: true, 
+      message: "Please enter the security code below to proceed.",
+      captchaUrl: nextCaptchaUrl,
+      token: currentToken,
+      cookies: currentCookies
+    });
+  }
+
+  // 3. No manual Captcha provided -> AUTO-SOLVE with OCR Space (Up to 3 attempts)
   const MAX_AUTO_ATTEMPTS = 3;
 
   try {
