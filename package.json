@@ -2,7 +2,9 @@
   "name": "digishakti-api",
   "version": "1.0.0",
   "scripts": {
-    "start": "npx vercel dev"
+    "start": "node server.js",
+    "dev": "node server.js",
+    "vercel": "npx vercel dev"
   },
   "dependencies": {
     "axios": "^1.7.0",

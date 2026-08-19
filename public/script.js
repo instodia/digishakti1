@@ -1,6 +1,7 @@
 const API_URL = window.location.origin;
 
 let sessionData = null;
+let collegeDetectTimeout = null;
 
 const initLoader = document.getElementById('init-loader');
 const searchForm = document.getElementById('search-form');
@@ -13,6 +14,10 @@ const refreshCaptchaBtn = document.getElementById('refresh-captcha-btn');
 const captchaInput = document.getElementById('captcha-input');
 
 const enrollInput = document.getElementById('enrollment-input');
+const collegeBadge = document.getElementById('college-badge');
+const detectedCollegeName = document.getElementById('detected-college-name');
+const detectedCollegeCode = document.getElementById('detected-college-code');
+
 const submitBtn = document.getElementById('submit-btn');
 const submitText = document.getElementById('submit-text');
 const submitLoader = document.getElementById('submit-loader');
@@ -20,13 +25,6 @@ const submitLoaderText = document.getElementById('submit-loader-text');
 
 const resultCard = document.getElementById('result-card');
 const resultGrid = document.getElementById('result-grid');
-
-const collegeSelect = document.getElementById('college-select');
-let selectedCollegeId = '11041';
-
-collegeSelect.addEventListener('change', (e) => {
-  selectedCollegeId = e.target.value;
-});
 
 const showError = (msg) => {
   if (!msg) {
@@ -37,9 +35,12 @@ const showError = (msg) => {
   errorBanner.classList.remove('hidden');
 };
 
-const showCaptcha = (captchaUrl) => {
+const showCaptcha = (customUrl) => {
   captchaSection.classList.remove('hidden');
-  captchaImg.src = `${API_URL}${captchaUrl}&t=${Date.now()}`;
+  const url = customUrl || (sessionData ? `/api/captcha?token=${encodeURIComponent(sessionData.token)}&cookies=${encodeURIComponent(sessionData.cookies)}` : '');
+  if (url) {
+    captchaImg.src = `${API_URL}${url}&t=${Date.now()}`;
+  }
   captchaInput.value = '';
   validateForm();
 };
@@ -47,11 +48,39 @@ const showCaptcha = (captchaUrl) => {
 const hideCaptcha = () => {
   captchaSection.classList.add('hidden');
   captchaInput.value = '';
+  validateForm();
+};
+
+const updateDetectedCollege = () => {
+  const clean = enrollInput.value.trim().replace(/\D/g, '');
+  if (clean.length < 6) {
+    collegeBadge.classList.add('hidden');
+    return;
+  }
+
+  clearTimeout(collegeDetectTimeout);
+  collegeDetectTimeout = setTimeout(async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/college?rollNo=${encodeURIComponent(clean)}`);
+      const data = await res.json();
+      if (data.success && data.college) {
+        detectedCollegeName.textContent = data.college.name;
+        detectedCollegeCode.textContent = `AKTU Code: ${data.college.code} (College ID: ${data.college.id})`;
+        collegeBadge.classList.remove('hidden');
+      } else {
+        collegeBadge.classList.add('hidden');
+      }
+    } catch {
+      collegeBadge.classList.add('hidden');
+    }
+  }, 150);
 };
 
 const validateForm = () => {
-  const hasEnrollment = enrollInput.value.trim() !== '';
-  const hasCaptcha = !captchaSection.classList.contains('hidden') ? captchaInput.value.trim() !== '' : true;
+  const clean = enrollInput.value.trim();
+  const hasEnrollment = clean.length >= 6;
+  const isCaptchaVisible = !captchaSection.classList.contains('hidden');
+  const hasCaptcha = isCaptchaVisible ? captchaInput.value.trim() !== '' : true;
   
   if (hasEnrollment && hasCaptcha) {
     submitBtn.classList.remove('bg-slate-700/50', 'text-slate-500', 'cursor-not-allowed');
@@ -64,7 +93,11 @@ const validateForm = () => {
   }
 };
 
-enrollInput.addEventListener('input', validateForm);
+enrollInput.addEventListener('input', () => {
+  updateDetectedCollege();
+  validateForm();
+});
+
 captchaInput.addEventListener('input', (e) => {
   e.target.value = e.target.value.toUpperCase();
   validateForm();
@@ -72,6 +105,9 @@ captchaInput.addEventListener('input', (e) => {
 
 const initSession = async () => {
   showError(null);
+  initLoader.classList.remove('hidden');
+  searchForm.classList.add('hidden');
+  hideCaptcha();
   try {
     const res = await fetch(`${API_URL}/api/start`);
     const data = await res.json();
@@ -83,18 +119,19 @@ const initSession = async () => {
       };
       initLoader.classList.add('hidden');
       searchForm.classList.remove('hidden');
+      validateForm();
     } else {
       showError(data.message || 'Failed to start session');
+      initLoader.classList.add('hidden');
     }
   } catch (err) {
-    showError('Backend offline. Please try again later.');
+    showError('Unable to connect to service: ' + err.message);
+    initLoader.classList.add('hidden');
   }
 };
 
 refreshCaptchaBtn.addEventListener('click', () => {
-  if (captchaImg.src) {
-    captchaImg.src = `${API_URL}/api/captcha?token=${encodeURIComponent(sessionData.token)}&cookies=${encodeURIComponent(sessionData.cookies)}&t=${Date.now()}`;
-  }
+  showCaptcha();
 });
 
 const isHiddenFilter = (key) => {
@@ -104,14 +141,15 @@ const isHiddenFilter = (key) => {
 
 searchForm.addEventListener('submit', async (e) => {
   e.preventDefault();
-  if (!sessionData || !selectedCollegeId) return;
+  if (!sessionData) return;
 
   showError(null);
   
+  const isManualCaptcha = !captchaSection.classList.contains('hidden');
   submitBtn.disabled = true;
   submitText.classList.add('hidden');
   submitLoader.classList.remove('hidden');
-  submitLoaderText.textContent = 'Processing...';
+  submitLoaderText.textContent = isManualCaptcha ? 'Searching...' : 'Auto-verifying & Searching...';
   resultCard.classList.add('hidden');
   resultGrid.innerHTML = '';
 
@@ -124,12 +162,14 @@ searchForm.addEventListener('submit', async (e) => {
         token: sessionData.token,
         cookies: sessionData.cookies,
         EnrollNo: enrollInput.value.trim(),
-        Captcha: captchaInput.value.trim(),
-        collegeId: selectedCollegeId
+        Captcha: isManualCaptcha ? captchaInput.value.trim() : ''
       })
     });
 
     const data = await res.json();
+
+    if (data.token) sessionData.token = data.token;
+    if (data.cookies) sessionData.cookies = data.cookies;
 
     if (data.success && data.data && Object.keys(data.data).length > 0) {
       const filteredData = Object.entries(data.data).filter(([key]) => !isHiddenFilter(key));
@@ -140,7 +180,7 @@ searchForm.addEventListener('submit', async (e) => {
       } else {
         filteredData.forEach(([key, val]) => {
           const div = document.createElement('div');
-          div.className = "flex flex-col sm:flex-row sm:justify-between py-2 border-b border-slate-700/30 last:border-0";
+          div.className = "flex flex-col sm:flex-row sm:justify-between py-2.5 border-b border-slate-700/30 last:border-0";
           div.innerHTML = `
             <span class="text-slate-400 mb-0.5 sm:mb-0">${key}</span>
             <span class="text-slate-200 font-medium text-left sm:text-right">${val || 'N/A'}</span>
@@ -154,12 +194,15 @@ searchForm.addEventListener('submit', async (e) => {
       resultCard.classList.add('hidden');
       resultGrid.innerHTML = '';
       showCaptcha(data.captchaUrl);
-      showError(data.message);
-      submitLoaderText.textContent = 'Manual verification needed';
+      showError(data.message || 'Please enter security characters to continue.');
+      setTimeout(() => captchaInput.focus(), 100);
     } else {
       resultCard.classList.add('hidden');
       resultGrid.innerHTML = '';
-      showError(data.message || 'User details not found.');
+      showError(data.message || 'Student record not found for this enrollment number.');
+      if (isManualCaptcha && data.captchaUrl) {
+        showCaptcha(data.captchaUrl);
+      }
     }
 
   } catch (err) {
