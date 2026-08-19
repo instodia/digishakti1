@@ -1,9 +1,32 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
+const https = require('https');
+let HttpsProxyAgent;
+try {
+  HttpsProxyAgent = require('https-proxy-agent').HttpsProxyAgent;
+} catch {
+  HttpsProxyAgent = null;
+}
 
 const BASE_URL = 'https://aadhaar.digishaktiup.in';
 const MAIN_URL = 'https://aadhaar.digishaktiup.in/EPramaan/SendServiceToEpramaan';
 const CAPTCHA_URL = 'https://aadhaar.digishaktiup.in/EPramaan/GetCaptchaimage';
+
+function getHttpsAgent() {
+  const proxyUrl = process.env.PROXY_URL || process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
+  if (proxyUrl && HttpsProxyAgent) {
+    return new HttpsProxyAgent(proxyUrl, {
+      rejectUnauthorized: false,
+      keepAlive: true,
+      timeout: 15000
+    });
+  }
+  return new https.Agent({
+    rejectUnauthorized: false,
+    keepAlive: true,
+    timeout: 15000
+  });
+}
 
 function randomDelay(min = 100, max = 300) {
   const delay = Math.floor(Math.random() * (max - min + 1)) + min;
@@ -11,12 +34,15 @@ function randomDelay(min = 100, max = 300) {
 }
 
 const defaultHeaders = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.6369.132 Safari/537.36',
-  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-  'Accept-Language': 'en-IN,en-US;q=0.9,en;q=0.8',
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+  'Accept-Language': 'en-IN,en-GB;q=0.9,en-US;q=0.8,en;q=0.7,hi;q=0.6',
   'Accept-Encoding': 'gzip, deflate, br',
   'Cache-Control': 'no-cache',
   'Pragma': 'no-cache',
+  'Sec-Ch-Ua': '"Not/A)Brand";v="8", "Chromium";v="126", "Google Chrome";v="126"',
+  'Sec-Ch-Ua-Mobile': '?0',
+  'Sec-Ch-Ua-Platform': '"Windows"',
   'Sec-Fetch-Dest': 'document',
   'Sec-Fetch-Mode': 'navigate',
   'Sec-Fetch-Site': 'none',
@@ -25,75 +51,105 @@ const defaultHeaders = {
   'Connection': 'keep-alive',
 };
 
+async function requestWithRetry(fn, retries = 2) {
+  let lastError;
+  for (let i = 0; i <= retries; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastError = err;
+      const isTimeoutOrNetwork = err.code === 'ECONNABORTED' || 
+                                 err.code === 'ECONNRESET' || 
+                                 err.code === 'ETIMEDOUT' || 
+                                 /timeout/i.test(err.message);
+      if (isTimeoutOrNetwork && i < retries) {
+        await randomDelay(300, 600);
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastError;
+}
+
 async function startSession() {
   await randomDelay(100, 250);
+  const agent = getHttpsAgent();
   
-  // Step 1: Hit root page to obtain initial ASP.NET session cookie and redirect token URL
-  const rootResponse = await axios.get(BASE_URL, {
-    maxRedirects: 0,
-    validateStatus: () => true,
-    headers: {
-      ...defaultHeaders,
-      'Referer': BASE_URL,
-      'Origin': BASE_URL
-    },
-    timeout: 8000
-  });
+  return await requestWithRetry(async () => {
+    // Step 1: Hit root page to obtain initial ASP.NET session cookie and redirect token URL
+    const rootResponse = await axios.get(BASE_URL, {
+      maxRedirects: 0,
+      validateStatus: () => true,
+      httpsAgent: agent,
+      headers: {
+        ...defaultHeaders,
+        'Referer': BASE_URL,
+        'Origin': BASE_URL
+      },
+      timeout: 15000
+    });
 
-  const cookies1 = rootResponse.headers['set-cookie'] || [];
-  const redirectPath = rootResponse.headers.location;
-  
-  if (!redirectPath) {
-    throw new Error("Failed to get initial redirection from DigiShakti portal.");
-  }
+    const cookies1 = rootResponse.headers['set-cookie'] || [];
+    const redirectPath = rootResponse.headers.location;
+    
+    if (!redirectPath) {
+      throw new Error("Failed to get initial redirection from DigiShakti portal.");
+    }
 
-  const targetUrl = redirectPath.startsWith('http') ? redirectPath : `${BASE_URL}${redirectPath.startsWith('/') ? '' : '/'}${redirectPath}`;
-  const initialCookieHeader = cookies1.map(c => c.split(';')[0]).join('; ');
+    const targetUrl = redirectPath.startsWith('http') ? redirectPath : `${BASE_URL}${redirectPath.startsWith('/') ? '' : '/'}${redirectPath}`;
+    const initialCookieHeader = cookies1.map(c => c.split(';')[0]).join('; ');
 
-  // Step 2: Fetch the verification form page with session cookie to extract CSRF token
-  const formResponse = await axios.get(targetUrl, {
-    headers: {
-      ...defaultHeaders,
-      'Cookie': initialCookieHeader,
-      'Referer': BASE_URL
-    },
-    timeout: 8000
-  });
+    // Step 2: Fetch the verification form page with session cookie to extract CSRF token
+    const formResponse = await axios.get(targetUrl, {
+      httpsAgent: agent,
+      headers: {
+        ...defaultHeaders,
+        'Cookie': initialCookieHeader,
+        'Referer': BASE_URL
+      },
+      timeout: 15000
+    });
 
-  const cookies2 = formResponse.headers['set-cookie'] || [];
-  const combinedCookies = [...cookies1, ...cookies2].map(c => c.split(';')[0]).join('; ');
+    const cookies2 = formResponse.headers['set-cookie'] || [];
+    const combinedCookies = [...cookies1, ...cookies2].map(c => c.split(';')[0]).join('; ');
 
-  const $ = cheerio.load(formResponse.data);
-  const token = $('input[name="__RequestVerificationToken"]').val();
+    const $ = cheerio.load(formResponse.data);
+    const token = $('input[name="__RequestVerificationToken"]').val();
 
-  if (!token) {
-    throw new Error("Failed to extract CSRF token.");
-  }
+    if (!token) {
+      throw new Error("Failed to extract CSRF token.");
+    }
 
-  const sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-  
-  return {
-    sessionId,
-    token,
-    cookies: combinedCookies
-  };
+    const sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    
+    return {
+      sessionId,
+      token,
+      cookies: combinedCookies
+    };
+  }, 2);
 }
 
 async function getCaptchaData(token, cookies) {
   await randomDelay(100, 200);
+  const agent = getHttpsAgent();
   
-  const response = await axios.get(CAPTCHA_URL, {
-    headers: {
-      ...defaultHeaders,
-      'Referer': MAIN_URL,
-      'Origin': BASE_URL,
-      'Cookie': cookies || ''
-    },
-    responseType: 'arraybuffer',
-    timeout: 6000
-  });
+  return await requestWithRetry(async () => {
+    const response = await axios.get(CAPTCHA_URL, {
+      httpsAgent: agent,
+      headers: {
+        ...defaultHeaders,
+        'Referer': MAIN_URL,
+        'Origin': BASE_URL,
+        'Cookie': cookies || ''
+      },
+      responseType: 'arraybuffer',
+      timeout: 12000
+    });
 
-  return response.data;
+    return response.data;
+  }, 2);
 }
 
 function generateCaptchaVariations(text) {
@@ -153,22 +209,26 @@ async function tryCaptchaSubmit(token, cookies, enrollNo, captcha, collegeId) {
   });
 
   await randomDelay(150, 300);
+  const agent = getHttpsAgent();
 
-  const response = await axios.post(MAIN_URL, formData.toString(), {
-    headers: {
-      ...defaultHeaders,
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'Origin': BASE_URL,
-      'Referer': MAIN_URL,
-      'Sec-Fetch-Dest': 'document',
-      'Sec-Fetch-Mode': 'navigate',
-      'Sec-Fetch-Site': 'same-origin',
-      'Sec-Fetch-User': '?1',
-      'Cookie': cookies || ''
-    },
-    timeout: 10000,
-    validateStatus: () => true
-  });
+  const response = await requestWithRetry(async () => {
+    return await axios.post(MAIN_URL, formData.toString(), {
+      httpsAgent: agent,
+      headers: {
+        ...defaultHeaders,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Origin': BASE_URL,
+        'Referer': MAIN_URL,
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'same-origin',
+        'Sec-Fetch-User': '?1',
+        'Cookie': cookies || ''
+      },
+      timeout: 15000,
+      validateStatus: () => true
+    });
+  }, 1);
 
   const updatedCookies = mergeCookies(cookies, response.headers['set-cookie']);
   const $ = cheerio.load(response.data);
