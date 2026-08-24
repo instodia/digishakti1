@@ -3,13 +3,68 @@ const { getCaptchaData, tryCaptchaSubmit, generateCaptchaVariations } = require(
 const { resolveCollegeByRollNo } = require('./lib/collegeResolver');
 const { solveWithTesseract } = require('./lib/localOcr');
 
+const OCR_API_URL = 'https://api.ocr.space/parse/image';
+const OCR_KEYS = [
+  process.env.OCR_API_KEY,
+  'K88753232888957',
+  'K84126154688957',
+  'helloworld'
+].filter(Boolean);
+
 async function solveCaptchaWithOCR(token, cookies) {
   try {
     const captchaBuffer = await getCaptchaData(token, cookies);
-    const localResult = await solveWithTesseract(captchaBuffer);
-    if (localResult && localResult.text) {
-      return localResult.text;
+    
+    // Step 1: Try ultra-fast local Tesseract OCR Engine (~20ms)
+    try {
+      const localResult = await solveWithTesseract(captchaBuffer);
+      if (localResult && localResult.text && localResult.text.length === 5 && localResult.confidence >= 70) {
+        return localResult.text;
+      }
+    } catch {
+      // Fall through to OCR Space Cloud Engine
     }
+
+    // Step 2: Fallback to OCR Space Engine 2 (Specialized for distorted ASP.NET CAPTCHAs)
+    const base64Image = Buffer.from(captchaBuffer).toString('base64');
+    const formData = new URLSearchParams();
+    formData.append('base64Image', `data:image/jpeg;base64,${base64Image}`);
+    formData.append('OCREngine', '2');
+    formData.append('scale', 'true');
+    formData.append('detectOrientation', 'true');
+
+    for (const key of OCR_KEYS) {
+      try {
+        const response = await axios.post(OCR_API_URL, formData.toString(), {
+          headers: {
+            'apikey': key,
+            'Content-Type': 'application/x-www-form-urlencoded'
+          },
+          timeout: 4000
+        });
+
+        if (response.data && response.data.ParsedResults && response.data.ParsedResults.length > 0) {
+          const rawText = response.data.ParsedResults[0].ParsedText || '';
+          const cleaned = rawText.trim().replace(/[^a-zA-Z0-9]/g, '');
+          if (cleaned.length >= 4 && cleaned.length <= 6) {
+            return cleaned;
+          }
+        }
+      } catch (err) {
+        // Try next key if this one fails
+      }
+    }
+
+    // Step 3: Last resort attempt with local Tesseract if it produced a 5-char output
+    try {
+      const localResult = await solveWithTesseract(captchaBuffer);
+      if (localResult && localResult.text && localResult.text.length === 5) {
+        return localResult.text;
+      }
+    } catch {
+      // Return null to trigger manual popup
+    }
+
     return null;
   } catch (error) {
     return null;
