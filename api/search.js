@@ -121,8 +121,8 @@ module.exports = async (req, res) => {
     });
   }
 
-  // 3. No manual Captcha provided -> AUTO-SOLVE with OCR Space (Up to 3 attempts)
-  const MAX_AUTO_ATTEMPTS = 3;
+  // 3. No manual Captcha provided -> AUTO-SOLVE with Local Tesseract OCR (Up to 2 attempts)
+  const MAX_AUTO_ATTEMPTS = 2;
 
   try {
     for (let attempt = 1; attempt <= MAX_AUTO_ATTEMPTS; attempt++) {
@@ -170,7 +170,7 @@ module.exports = async (req, res) => {
       }
     }
 
-    // If all 3 auto-solving attempts failed or were rejected -> Prompt manual CAPTCHA
+    // If both 2 local Tesseract OCR attempts failed or were rejected -> Prompt manual CAPTCHA
     const nextCaptchaUrl = `/api/captcha?token=${encodeURIComponent(currentToken)}&cookies=${encodeURIComponent(currentCookies)}`;
     return res.json({ 
       success: false, 
