@@ -1,6 +1,7 @@
 const axios = require('axios');
 const { getCaptchaData, tryCaptchaSubmit, generateCaptchaVariations } = require('./lib/index');
 const { resolveCollegeByRollNo } = require('./lib/collegeResolver');
+const { solveWithTesseract } = require('./lib/localOcr');
 
 const OCR_API_URL = 'https://api.ocr.space/parse/image';
 const OCR_KEYS = [
@@ -13,6 +14,18 @@ const OCR_KEYS = [
 async function solveCaptchaWithOCR(token, cookies) {
   try {
     const captchaBuffer = await getCaptchaData(token, cookies);
+    
+    // Step 1: Try ultra-fast local Tesseract OCR (~80ms, zero third-party dependency)
+    try {
+      const localResult = await solveWithTesseract(captchaBuffer);
+      if (localResult && localResult.text) {
+        return localResult.text;
+      }
+    } catch {
+      // If local engine fails, fall through to OCR Space cloud API
+    }
+
+    // Step 2: Fallback to OCR Space cloud API
     const base64Image = Buffer.from(captchaBuffer).toString('base64');
     
     const formData = new URLSearchParams();
