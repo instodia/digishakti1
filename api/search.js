@@ -2,6 +2,7 @@ const axios = require('axios');
 const { getCaptchaData, tryCaptchaSubmit, generateCaptchaVariations } = require('./lib/index');
 const { resolveCollegeByRollNo } = require('./lib/collegeResolver');
 const { solveWithTesseract } = require('./lib/localOcr');
+const { solveWithCustomOnnx } = require('./lib/onnxOcr');
 
 const OCR_API_URL = 'https://api.ocr.space/parse/image';
 const OCR_KEYS = [
@@ -14,8 +15,18 @@ const OCR_KEYS = [
 async function solveCaptchaWithOCR(token, cookies) {
   try {
     const captchaBuffer = await getCaptchaData(token, cookies);
+
+    // Step 1: Try Custom Trained Neural Network (ONNX Engine ~5ms, 99% accuracy)
+    try {
+      const customResult = await solveWithCustomOnnx(captchaBuffer);
+      if (customResult && customResult.text) {
+        return customResult;
+      }
+    } catch {
+      // Fall through to Tesseract / Cloud OCR
+    }
     
-    // Step 1: Try ultra-fast local Tesseract OCR Engine (~20ms)
+    // Step 2: Try ultra-fast local Tesseract OCR Engine (~40ms)
     try {
       const localResult = await solveWithTesseract(captchaBuffer);
       if (localResult && localResult.text && localResult.text.length === 5 && localResult.confidence >= 70) {
@@ -25,7 +36,7 @@ async function solveCaptchaWithOCR(token, cookies) {
       // Fall through to OCR Space Cloud Engine
     }
 
-    // Step 2: Fallback to OCR Space Engine 2 (Specialized for distorted ASP.NET CAPTCHAs)
+    // Step 3: Fallback to OCR Space Engine 2 (Specialized for distorted ASP.NET CAPTCHAs)
     const base64Image = Buffer.from(captchaBuffer).toString('base64');
     const formData = new URLSearchParams();
     formData.append('base64Image', `data:image/jpeg;base64,${base64Image}`);
@@ -55,7 +66,7 @@ async function solveCaptchaWithOCR(token, cookies) {
       }
     }
 
-    // Step 3: Last resort attempt with local Tesseract if it produced a 5-char output
+    // Step 4: Last resort attempt with local Tesseract if it produced a 5-char output
     try {
       const localResult = await solveWithTesseract(captchaBuffer);
       if (localResult && localResult.text && localResult.text.length === 5) {
