@@ -2,7 +2,7 @@ const axios = require('axios');
 const { getCaptchaData, tryCaptchaSubmit, generateCaptchaVariations } = require('./lib/index');
 const { resolveCollegeByRollNo } = require('./lib/collegeResolver');
 const { solveWithTesseract } = require('./lib/localOcr');
-const { solveWithCustomOnnx } = require('./lib/onnxOcr');
+const { solveWithONNX } = require('./lib/onnxOcr');
 
 const OCR_API_URL = 'https://api.ocr.space/parse/image';
 const OCR_KEYS = [
@@ -15,18 +15,18 @@ const OCR_KEYS = [
 async function solveCaptchaWithOCR(token, cookies) {
   try {
     const captchaBuffer = await getCaptchaData(token, cookies);
-
-    // Step 1: Try Custom Trained Neural Network (ONNX Engine ~5ms, 99% accuracy)
+    
+    // Step 1: Try ultra-fast Custom ONNX Neural Network Model (~5ms)
     try {
-      const customResult = await solveWithCustomOnnx(captchaBuffer);
-      if (customResult && customResult.text) {
-        return customResult;
+      const onnxText = await solveWithONNX(captchaBuffer);
+      if (onnxText && onnxText.length === 5) {
+        return { text: onnxText, method: 'Custom ONNX Neural Net' };
       }
     } catch {
-      // Fall through to Tesseract / Cloud OCR
+      // Fall through to local Tesseract
     }
-    
-    // Step 2: Try ultra-fast local Tesseract OCR Engine (~40ms)
+
+    // Step 2: Try local Tesseract OCR Engine (~40ms)
     try {
       const localResult = await solveWithTesseract(captchaBuffer);
       if (localResult && localResult.text && localResult.text.length === 5 && localResult.confidence >= 70) {

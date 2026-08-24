@@ -1,12 +1,7 @@
-const fs = require('fs');
-const path = require('path');
+const ort = require('onnxruntime-node');
 const sharp = require('sharp');
-let ort;
-try {
-  ort = require('onnxruntime-node');
-} catch {
-  ort = null;
-}
+const path = require('path');
+const fs = require('fs');
 
 const MODEL_PATH = path.join(__dirname, '..', '..', 'data', 'digishakti_captcha.onnx');
 const CHARS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -17,16 +12,15 @@ for (let i = 0; i < CHARS.length; i++) {
 
 let sessionPromise = null;
 
-async function getOnnxSession() {
-  if (!ort || !fs.existsSync(MODEL_PATH)) return null;
+async function getSession() {
+  if (!fs.existsSync(MODEL_PATH)) return null;
   if (!sessionPromise) {
     sessionPromise = (async () => {
       try {
         const session = await ort.InferenceSession.create(MODEL_PATH);
-        console.log('[ONNX] Custom DigiShakti neural network loaded successfully!');
         return session;
       } catch (err) {
-        console.error('[ONNX] Failed to load model:', err.message);
+        console.error('Failed to load local ONNX session:', err.message);
         sessionPromise = null;
         return null;
       }
@@ -35,78 +29,63 @@ async function getOnnxSession() {
   return sessionPromise;
 }
 
-async function preprocessForOnnx(buffer) {
-  // Resize to 128x32 grayscale
-  const rawData = await sharp(buffer)
-    .resize(128, 32, { fit: 'fill' })
-    .grayscale()
-    .raw()
-    .toBuffer();
-
-  // Create Float32Array normalized [-1.0, 1.0]
-  const floatArray = new Float32Array(128 * 32);
-  for (let i = 0; i < rawData.length; i++) {
-    const val = rawData[i] / 255.0;
-    floatArray[i] = (val - 0.5) / 0.5;
-  }
-  return new ort.Tensor('float32', floatArray, [1, 1, 32, 128]);
-}
-
-function ctcDecode(logitsData, dims) {
-  // dims: [1, sequence_length (32), num_classes (37)]
-  const seqLen = dims[1];
-  const numClasses = dims[2];
-  
-  const rawIndices = [];
-  for (let t = 0; t < seqLen; t++) {
-    let maxIdx = 0;
-    let maxVal = -Infinity;
-    for (let c = 0; c < numClasses; c++) {
-      const val = logitsData[t * numClasses + c];
-      if (val > maxVal) {
-        maxVal = val;
-        maxIdx = c;
-      }
-    }
-    rawIndices.push(maxIdx);
-  }
-
-  // CTC Greedy decoder: collapse duplicates & skip blank (0)
-  let prev = -1;
-  let text = '';
-  for (const idx of rawIndices) {
-    if (idx !== 0 && idx !== prev) {
-      if (INT_TO_CHAR[idx]) {
-        text += INT_TO_CHAR[idx];
-      }
-    }
-    prev = idx;
-  }
-  return text;
-}
-
-async function solveWithCustomOnnx(imageBuffer) {
+async function solveWithONNX(imageBuffer) {
   try {
-    const session = await getOnnxSession();
+    const session = await getSession();
     if (!session) return null;
 
-    const tensor = await preprocessForOnnx(imageBuffer);
-    const results = await session.run({ input: tensor });
+    const rawPixelBuffer = await sharp(imageBuffer)
+      .resize(128, 32, { fit: 'fill' })
+      .grayscale()
+      .raw()
+      .toBuffer();
 
-    const outputTensor = results.output || Object.values(results)[0];
-    if (!outputTensor) return null;
+    const float32Data = new Float32Array(1 * 1 * 32 * 128);
+    for (let i = 0; i < rawPixelBuffer.length; i++) {
+      float32Data[i] = (rawPixelBuffer[i] / 255.0 - 0.5) / 0.5;
+    }
 
-    const decoded = ctcDecode(outputTensor.data, outputTensor.dims);
-    const clean = decoded.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const tensor = new ort.Tensor('float32', float32Data, [1, 1, 32, 128]);
+    const outputs = await session.run({ input: tensor });
+    const outputTensor = outputs.output;
+    const data = outputTensor.data;
+    const dims = outputTensor.dims; // [1, W, 37]
 
+    const width = dims[1];
+    const numClasses = dims[2];
+
+    let rawSequence = [];
+    for (let w = 0; w < width; w++) {
+      let maxIdx = 0;
+      let maxVal = -Infinity;
+      for (let c = 0; c < numClasses; c++) {
+        const val = data[w * numClasses + c];
+        if (val > maxVal) {
+          maxVal = val;
+          maxIdx = c;
+        }
+      }
+      rawSequence.push(maxIdx);
+    }
+
+    let prev = -1;
+    let text = '';
+    for (const idx of rawSequence) {
+      if (idx !== 0 && idx !== prev) {
+        if (INT_TO_CHAR[idx]) text += INT_TO_CHAR[idx];
+      }
+      prev = idx;
+    }
+
+    const clean = text.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
     if (clean.length >= 4 && clean.length <= 6) {
-      return { text: clean, method: 'Custom Neural Network (ONNX)' };
+      return clean;
     }
     return null;
   } catch (err) {
-    console.error('[ONNX] Inference error:', err.message);
+    console.error('ONNX model inference error:', err.message);
     return null;
   }
 }
 
-module.exports = { solveWithCustomOnnx, isModelAvailable: () => fs.existsSync(MODEL_PATH) };
+module.exports = { solveWithONNX };
