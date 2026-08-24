@@ -23,9 +23,6 @@ const refreshCaptchaBtn = document.getElementById('refresh-captcha-btn');
 const captchaInput = document.getElementById('captcha-input');
 
 const enrollInput = document.getElementById('enrollment-input');
-const collegeBadge = document.getElementById('college-badge');
-const detectedCollegeName = document.getElementById('detected-college-name');
-const detectedCollegeCode = document.getElementById('detected-college-code');
 
 const submitBtn = document.getElementById('submit-btn');
 const submitText = document.getElementById('submit-text');
@@ -92,31 +89,6 @@ refreshCaptchaBtn.addEventListener('click', () => {
   }
 });
 
-const updateDetectedCollege = () => {
-  const clean = enrollInput.value.trim().replace(/\D/g, '');
-  if (clean.length < 6) {
-    collegeBadge.classList.add('hidden');
-    return;
-  }
-
-  clearTimeout(collegeDetectTimeout);
-  collegeDetectTimeout = setTimeout(async () => {
-    try {
-      const res = await fetch(`${API_URL}/api/college?rollNo=${encodeURIComponent(clean)}`);
-      const data = await res.json();
-      if (data.success && data.college) {
-        detectedCollegeName.textContent = data.college.name;
-        detectedCollegeCode.textContent = `AKTU Code: ${data.college.code} (College ID: ${data.college.id})`;
-        collegeBadge.classList.remove('hidden');
-      } else {
-        collegeBadge.classList.add('hidden');
-      }
-    } catch {
-      collegeBadge.classList.add('hidden');
-    }
-  }, 150);
-};
-
 const validateForm = () => {
   const clean = enrollInput.value.trim();
   const hasEnrollment = clean.length >= 6;
@@ -133,7 +105,6 @@ const validateForm = () => {
 };
 
 enrollInput.addEventListener('input', () => {
-  updateDetectedCollege();
   validateForm();
 });
 
