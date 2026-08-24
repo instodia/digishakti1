@@ -24,6 +24,7 @@ const captchaInput = document.getElementById('captcha-input');
 
 const enrollInput = document.getElementById('enrollment-input');
 
+const solverBadge = document.getElementById('solver-badge');
 const submitBtn = document.getElementById('submit-btn');
 const submitText = document.getElementById('submit-text');
 const submitLoader = document.getElementById('submit-loader');
@@ -128,10 +129,20 @@ const isHiddenFilter = (key) => {
   return k.includes('email') || k.includes('mobile') || k.includes('phone') || k.includes('kyc') || k.includes('attempt') || k.includes('nationality');
 };
 
-const renderResults = (data) => {
+const renderResults = (data, solverInfo) => {
   const filteredData = Object.entries(data).filter(([key]) => !isHiddenFilter(key));
   resultGrid.innerHTML = '';
   
+  if (solverBadge) {
+    if (solverInfo && solverInfo.method) {
+      const icon = solverInfo.method.includes('Tesseract') ? '⚡' : solverInfo.method.includes('OCR Space') ? '☁️' : '👤';
+      solverBadge.textContent = `${icon} Solved via ${solverInfo.method} ("${solverInfo.captcha}")`;
+      solverBadge.classList.remove('hidden');
+    } else {
+      solverBadge.classList.add('hidden');
+    }
+  }
+
   if (filteredData.length === 0) {
     resultCard.classList.add('hidden');
     showError('User details not found.');
@@ -182,7 +193,7 @@ searchForm.addEventListener('submit', async (e) => {
     if (data.cookies) sessionData.cookies = data.cookies;
 
     if (data.success && data.data && Object.keys(data.data).length > 0) {
-      renderResults(data.data);
+      renderResults(data.data, data.solverInfo);
       submitBtn.disabled = false;
       submitText.classList.remove('hidden');
       submitLoader.classList.add('hidden');
@@ -240,7 +251,7 @@ const executeManualVerification = async () => {
 
     if (data.success && data.data && Object.keys(data.data).length > 0) {
       closeCaptchaModal();
-      renderResults(data.data);
+      renderResults(data.data, data.solverInfo);
     } else if (data.isCaptchaError || data.needsManualCaptcha) {
       // Stay in modal, refresh CAPTCHA, and show error
       showModalError(data.message || 'Invalid CAPTCHA code. Please try again.');

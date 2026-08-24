@@ -19,7 +19,7 @@ async function solveCaptchaWithOCR(token, cookies) {
     try {
       const localResult = await solveWithTesseract(captchaBuffer);
       if (localResult && localResult.text && localResult.text.length === 5 && localResult.confidence >= 70) {
-        return localResult.text;
+        return { text: localResult.text, method: 'Local Tesseract' };
       }
     } catch {
       // Fall through to OCR Space Cloud Engine
@@ -47,7 +47,7 @@ async function solveCaptchaWithOCR(token, cookies) {
           const rawText = response.data.ParsedResults[0].ParsedText || '';
           const cleaned = rawText.trim().replace(/[^a-zA-Z0-9]/g, '');
           if (cleaned.length >= 4 && cleaned.length <= 6) {
-            return cleaned;
+            return { text: cleaned, method: 'OCR Space Engine 2' };
           }
         }
       } catch (err) {
@@ -59,7 +59,7 @@ async function solveCaptchaWithOCR(token, cookies) {
     try {
       const localResult = await solveWithTesseract(captchaBuffer);
       if (localResult && localResult.text && localResult.text.length === 5) {
-        return localResult.text;
+        return { text: localResult.text, method: 'Local Tesseract' };
       }
     } catch {
       // Return null to trigger manual popup
@@ -124,6 +124,7 @@ module.exports = async (req, res) => {
       const nextCaptchaUrl = `/api/captcha?token=${encodeURIComponent(updatedToken)}&cookies=${encodeURIComponent(updatedCookies)}`;
 
       if (result.success) {
+        console.log(`[CAPTCHA SOLVED] Roll: ${cleanEnrollNo} | Method: Manual User Input | Code: "${userCaptcha}"`);
         const sanitized = filterPII(result.details);
         if (!sanitized['College'] && !sanitized['Institute'] && collegeInfo?.collegeName) {
           sanitized['Detected College'] = collegeInfo.collegeName;
@@ -132,6 +133,11 @@ module.exports = async (req, res) => {
           success: true, 
           data: sanitized,
           college: collegeInfo ? { name: collegeInfo.collegeName, code: collegeInfo.collegeCode } : null,
+          solverInfo: {
+            method: 'Manual User Input',
+            captcha: userCaptcha,
+            attempts: 1
+          },
           captchaUrl: nextCaptchaUrl,
           token: updatedToken,
           cookies: updatedCookies
@@ -176,14 +182,15 @@ module.exports = async (req, res) => {
     });
   }
 
-  // 3. No manual Captcha provided -> AUTO-SOLVE with Local Tesseract OCR (Up to 2 attempts)
+  // 3. No manual Captcha provided -> AUTO-SOLVE with Dual Hybrid Engine (Up to 2 attempts)
   const MAX_AUTO_ATTEMPTS = 2;
 
   try {
     for (let attempt = 1; attempt <= MAX_AUTO_ATTEMPTS; attempt++) {
-      const solvedCaptcha = await solveCaptchaWithOCR(currentToken, currentCookies);
+      const solveResult = await solveCaptchaWithOCR(currentToken, currentCookies);
 
-      if (solvedCaptcha) {
+      if (solveResult && solveResult.text) {
+        const solvedCaptcha = solveResult.text;
         const variations = generateCaptchaVariations(solvedCaptcha);
 
         for (const variant of variations) {
@@ -192,6 +199,7 @@ module.exports = async (req, res) => {
           if (result.newCookies) currentCookies = result.newCookies;
 
           if (result.success) {
+            console.log(`[CAPTCHA SOLVED] Roll: ${cleanEnrollNo} | Method: ${solveResult.method} | Code: "${variant}" (Attempt ${attempt})`);
             const sanitized = filterPII(result.details);
             if (!sanitized['College'] && !sanitized['Institute'] && collegeInfo?.collegeName) {
               sanitized['Detected College'] = collegeInfo.collegeName;
@@ -200,6 +208,11 @@ module.exports = async (req, res) => {
               success: true, 
               data: sanitized,
               college: collegeInfo ? { name: collegeInfo.collegeName, code: collegeInfo.collegeCode } : null,
+              solverInfo: {
+                method: solveResult.method,
+                captcha: variant,
+                attempts: attempt
+              },
               captchaUrl: `/api/captcha?token=${encodeURIComponent(currentToken)}&cookies=${encodeURIComponent(currentCookies)}`,
               token: currentToken,
               cookies: currentCookies
@@ -225,7 +238,7 @@ module.exports = async (req, res) => {
       }
     }
 
-    // If both 2 local Tesseract OCR attempts failed or were rejected -> Prompt manual CAPTCHA
+    // If both 2 auto-solving attempts failed or were rejected -> Prompt manual CAPTCHA
     const nextCaptchaUrl = `/api/captcha?token=${encodeURIComponent(currentToken)}&cookies=${encodeURIComponent(currentCookies)}`;
     return res.json({ 
       success: false, 
